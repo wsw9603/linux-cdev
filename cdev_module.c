@@ -18,7 +18,7 @@ static struct cdev *demo_cdev = NULL;
 
 static int demo_open(struct inode *inode, struct file *filp)
 {
-	wws_pr_info("file opened by, %s: pid = %d",
+	wws_pr_info("file opened by, (%s: pid = %d)",
 		    current->comm, current->pid);
 	wws_pr_info("major: %d, minor: %d", imajor(inode), iminor(inode));
 	return 0;
@@ -26,7 +26,7 @@ static int demo_open(struct inode *inode, struct file *filp)
 
 static int demo_release(struct inode *inode, struct file *filp)
 {
-	wws_pr_info("file release by, %s: pid = %d",
+	wws_pr_info("file release by, (%s: pid = %d)",
 		    current->comm, current->pid);
 	wws_pr_info("major: %d, minor: %d", imajor(inode), iminor(inode));
 	return 0;
@@ -36,7 +36,7 @@ static ssize_t demo_read(struct file *filp, char __user *buf,
 			 size_t size, loff_t *offset)
 {
 	struct inode *inode = filp->f_path.dentry->d_inode;
-	wws_pr_info("file read by, %s: pid = %d",
+	wws_pr_info("file read by, (%s: pid = %d)",
 		    current->comm, current->pid);
 	wws_pr_info("major: %d, minor: %d", imajor(inode), iminor(inode));
 	return 0;
@@ -46,7 +46,7 @@ static ssize_t demo_write(struct file *filp, const char __user *buf,
 			  size_t size, loff_t *offset)
 {
 	struct inode *inode = filp->f_path.dentry->d_inode;
-	wws_pr_info("file write by, %s: pid = %d",
+	wws_pr_info("file write by, (%s: pid = %d)",
 		    current->comm, current->pid);
 	wws_pr_info("major: %d, minor: %d", imajor(inode), iminor(inode));
 	return 2;
