@@ -49,7 +49,7 @@ static ssize_t demo_write(struct file *filp, const char __user *buf,
 	wws_pr_info("file write by, %s: pid = %d",
 		    current->comm, current->pid);
 	wws_pr_info("major: %d, minor: %d", imajor(inode), iminor(inode));
-	return 0;
+	return 2;
 }
 
 static struct file_operations fops = {
