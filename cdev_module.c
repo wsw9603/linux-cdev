@@ -12,8 +12,9 @@
 
 static int major = 0;
 static int minor = 1;
-const int count = 3;
+static const int count = 3;
 
+static struct class *pclass = NULL;
 static struct cdev *demo_cdev = NULL;
 
 static int demo_open(struct inode *inode, struct file *filp)
@@ -63,7 +64,8 @@ static struct file_operations fops = {
 static int __init demo_init(void)
 {
 	dev_t devnum;
-	int ret;
+	int ret, i;
+	struct device *pdev;
 
 	wws_pr_info("init demo: (%s: pid=%d)", current->comm, current->pid);
 
@@ -87,9 +89,30 @@ static int __init demo_init(void)
 		goto error_reg;
 	}
 
+	pclass = class_create(THIS_MODULE, DEVNAME);
+	if (IS_ERR(pclass)) {
+		wws_pr_info("create device class failed");
+		ret = PTR_ERR(pclass);
+		goto error_reg;
+	}
+
+	for (i = minor; i < minor + count; i++) {
+		pdev = device_create(pclass, NULL, MKDEV(major, i), NULL,
+				     "%s%d", DEVNAME, i);
+		if (IS_ERR(pdev)) {
+			wws_pr_info("create device %d failed", i);
+			ret = PTR_ERR(pdev);
+			goto error_create_device;
+		}
+	}
+
 	wws_pr_info("register cdev successfully, major: %d", major);
 	return 0;
 
+error_create_device:
+	for (i--; i >= minor; i--)
+		device_destroy(pclass, MKDEV(major, i));
+	class_destroy(pclass);
 error_reg:
 	unregister_chrdev_region(devnum, count);
 error_alloc:
@@ -100,7 +123,14 @@ error_alloc:
 
 static void __exit demo_exit(void)
 {
+	int i;
+
 	wws_pr_info("exit demo: (%s: pid=%d)", current->comm, current->pid);
+
+	for (i = minor; i < minor + count; i++)
+		device_destroy(pclass, MKDEV(major, i));
+	class_destroy(pclass);
+
 	unregister_chrdev_region(MKDEV(major, minor), count);
 	cdev_del(demo_cdev);
 }
