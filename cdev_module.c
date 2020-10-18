@@ -17,14 +17,15 @@
 static int major = 0;
 module_param(major, int, S_IRUGO);
 static int minor = 1;
-static const int count = 3;
+static int count = 3; /* 驱动所创建的设备数目 */
+module_param(count, int, S_IRUGO);
 
 struct globalmem_dev {
-	struct class *pclass;
 	struct cdev cdev;
 	char buf[GLOBALMEM_SIZE];
 };
 
+static struct class *pclass;
 static struct globalmem_dev *pglobalmem_dev;
 
 static int globalmem_open(struct inode *inode, struct file *filp)
@@ -33,7 +34,8 @@ static int globalmem_open(struct inode *inode, struct file *filp)
 		    current->comm, current->pid);
 	wws_pr_info("major: %d, minor: %d", imajor(inode), iminor(inode));
 
-	filp->private_data = pglobalmem_dev;
+	filp->private_data = container_of(inode->i_cdev,
+					  struct globalmem_dev, cdev);
 
 	return 0;
 }
@@ -43,8 +45,6 @@ static int globalmem_release(struct inode *inode, struct file *filp)
 	wws_pr_info("file release by, (%s: pid = %d)",
 		    current->comm, current->pid);
 	wws_pr_info("major: %d, minor: %d", imajor(inode), iminor(inode));
-
-	filp->private_data = NULL;
 
 	return 0;
 }
@@ -145,65 +145,92 @@ static struct file_operations fops = {
 	.unlocked_ioctl	= globalmem_ioctl,
 };
 
+static int __init globalmem_setup(int idx)
+{
+	int ret;
+	struct device *pdevice;
+	dev_t devnum = MKDEV(major, minor + idx);
+	struct globalmem_dev *pdev = pglobalmem_dev + idx;
+
+	cdev_init(&pdev->cdev, &fops);
+
+	ret = cdev_add(&pdev->cdev, devnum, 1);
+	if (ret) {
+		wws_pr_info("register cdev failed");
+		return ret;
+	}
+
+	pdevice = device_create(pclass, NULL, devnum, NULL,
+				"%s%d", DEVNAME, idx + minor);
+	if (IS_ERR(pdevice)) {
+		wws_pr_info("create device %d failed", idx);
+		ret = PTR_ERR(pdevice);
+		goto error_out;
+	}
+
+	return 0;
+
+error_out:
+	cdev_del(&pdev->cdev);
+	return ret;
+}
+
+static void globalmem_reset(int idx)
+{
+	device_destroy(pclass, MKDEV(major, minor + idx));
+	cdev_del(&(pglobalmem_dev + idx)->cdev);
+}
+
 static int __init globalmem_init(void)
 {
 	dev_t devnum = MKDEV(major, minor);
 	int ret, i;
-	struct device *pdev;
 
 	wws_pr_info("init demo: (%s: pid=%d)", current->comm, current->pid);
 
-	pglobalmem_dev = kzalloc(sizeof(*pglobalmem_dev), GFP_KERNEL);
-	if (!pglobalmem_dev)
-		return -ENOMEM;
-
-	cdev_init(&pglobalmem_dev->cdev, &fops);
-
+	/*
+	 * 注册设备号，创建class，创建设备文件和注册设备之间的时序关系是怎样
+	 * 的？代码中的这种流程是否有问题？
+	 */
 	if (major)
 		ret = register_chrdev_region(devnum, count, DEVNAME);
 	else
 		ret = alloc_chrdev_region(&devnum, minor, count, DEVNAME);
 	if (ret) {
 		wws_pr_info("register/alloc cdev number failed");
-		goto error_alloc;
+		return -EFAULT;
 	}
 	major = MAJOR(devnum);
 
-	ret = cdev_add(&pglobalmem_dev->cdev, devnum, count);
-	if (ret) {
-		wws_pr_info("register cdev failed");
+	pglobalmem_dev = kzalloc(sizeof(*pglobalmem_dev) * count, GFP_KERNEL);
+	if (!pglobalmem_dev) {
+		ret = -ENOMEM;
 		goto error_reg;
 	}
 
-	pglobalmem_dev->pclass = class_create(THIS_MODULE, DEVNAME);
-	if (IS_ERR(pglobalmem_dev->pclass)) {
+	pclass = class_create(THIS_MODULE, DEVNAME);
+	if (IS_ERR(pclass)) {
 		wws_pr_info("create device class failed");
-		ret = PTR_ERR(pglobalmem_dev->pclass);
-		goto error_reg;
+		ret = PTR_ERR(pclass);
+		goto error_alloc;
 	}
 
-	for (i = minor; i < minor + count; i++) {
-		pdev = device_create(pglobalmem_dev->pclass, NULL,
-				     MKDEV(major, i), NULL,
-				     "%s%d", DEVNAME, i);
-		if (IS_ERR(pdev)) {
-			wws_pr_info("create device %d failed", i);
-			ret = PTR_ERR(pdev);
-			goto error_create_device;
-		}
+	for (i = 0; i < count; i++) {
+		ret = globalmem_setup(i);
+		if (ret < 0)
+			goto error_setup;
 	}
-
 	wws_pr_info("register cdev successfully, major: %d", major);
 	return 0;
 
-error_create_device:
-	for (i--; i >= minor; i--)
-		device_destroy(pglobalmem_dev->pclass, MKDEV(major, i));
-	class_destroy(pglobalmem_dev->pclass);
-error_reg:
-	unregister_chrdev_region(devnum, count);
+error_setup:
+	for (i--; i >= 0; i--)
+		globalmem_reset(i);
+	class_destroy(pclass);
 error_alloc:
 	cdev_del(&pglobalmem_dev->cdev);
+error_reg:
+	unregister_chrdev_region(devnum, count);
 
 	return ret;
 }
@@ -214,12 +241,12 @@ static void __exit globalmem_exit(void)
 
 	wws_pr_info("exit demo: (%s: pid=%d)", current->comm, current->pid);
 
-	for (i = minor; i < minor + count; i++)
-		device_destroy(pglobalmem_dev->pclass, MKDEV(major, i));
-	class_destroy(pglobalmem_dev->pclass);
+	for (i = 0; i < count; i++)
+		globalmem_reset(i);
+	class_destroy(pclass);
 
 	unregister_chrdev_region(MKDEV(major, minor), count);
-	cdev_del(&pglobalmem_dev->cdev);
+	kfree(pglobalmem_dev);
 }
 
 module_init(globalmem_init);
