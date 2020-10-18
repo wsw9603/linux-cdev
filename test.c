@@ -18,15 +18,23 @@ int main(int argc, const char *argv[])
 	}
 
 	getchar();
-	int ret = read(fd, 0x321, 0);
-	printf("read result is %d\n", ret);
-
-	getchar();
-	ret = write(fd, 0x321, 0);
+	int ret = write(fd, "hello world", 12);
 	printf("write result is %d\n", ret);
 
 	getchar();
+	printf("seek to the file start\n");
+	lseek(fd, 0, SEEK_SET);
+	char read_buf[100];
+	ret = read(fd, read_buf, 12);
+	printf("read result is \'%s\', len %d\n", read_buf, ret);
 
+	getchar();
+	printf("seek to the 6 bytes before\n");
+	lseek(fd, -6, SEEK_CUR);
+	ret = read(fd, read_buf, 12);
+	printf("read result is \'%s\', len %d\n", read_buf, ret);
+
+	getchar();
 	close(fd);
 
 	return 0;

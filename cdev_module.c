@@ -99,12 +99,32 @@ static ssize_t globalmem_write(struct file *filp, const char __user *buf,
 	return size;
 }
 
+static loff_t globalmem_llseek(struct file *filp, loff_t offset, int orig)
+{
+	switch (orig) {
+	case SEEK_SET:
+		if (offset < 0 || offset >= GLOBALMEM_SIZE)
+			return -EINVAL;
+		filp->f_pos = offset;
+		return offset;
+	case SEEK_CUR:
+		if (filp->f_pos + offset < 0 ||
+		    filp->f_pos + offset >= GLOBALMEM_SIZE)
+			return -EINVAL;
+		filp->f_pos += offset;
+		return filp->f_pos;
+	default:
+		return -EINVAL;
+	}
+}
+
 static struct file_operations fops = {
 	.owner		= THIS_MODULE,
 	.open		= globalmem_open,
 	.release	= globalmem_release,
 	.read		= globalmem_read,
 	.write		= globalmem_write,
+	.llseek		= globalmem_llseek,
 };
 
 static int __init globalmem_init(void)
