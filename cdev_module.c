@@ -5,6 +5,8 @@
 #include <linux/fs.h>
 #include <linux/slab.h>
 
+#include "cdev_module.h"
+
 #define DEVNAME "globalmem"
 #define GLOBALMEM_SIZE 0x1000
 
@@ -118,6 +120,21 @@ static loff_t globalmem_llseek(struct file *filp, loff_t offset, int orig)
 	}
 }
 
+static long globalmem_ioctl(struct file *filp, unsigned int cmd,
+			   unsigned long arg)
+{
+	struct globalmem_dev *pdev = filp->private_data;
+
+	switch (cmd) {
+	case MEM_CLEAR:
+		memset(pdev->buf, 0, GLOBALMEM_SIZE);
+		wws_pr_info("clear buffer to zero");
+		return 0;
+	default:
+		return -EINVAL;
+	}
+}
+
 static struct file_operations fops = {
 	.owner		= THIS_MODULE,
 	.open		= globalmem_open,
@@ -125,6 +142,7 @@ static struct file_operations fops = {
 	.read		= globalmem_read,
 	.write		= globalmem_write,
 	.llseek		= globalmem_llseek,
+	.unlocked_ioctl	= globalmem_ioctl,
 };
 
 static int __init globalmem_init(void)

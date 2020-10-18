@@ -3,6 +3,9 @@
 #include <sys/types.h>
 #include <sys/stat.h>
 #include <fcntl.h>
+#include <sys/ioctl.h>
+
+#include "cdev_module.h"
 
 int main(int argc, const char *argv[])
 {
@@ -35,6 +38,12 @@ int main(int argc, const char *argv[])
 	printf("read result is \'%s\', len %d\n", read_buf, ret);
 
 	getchar();
+	printf("clear memory buffer and read at start\n");
+	lseek(fd, 0, SEEK_SET);
+	ret = ioctl(fd, MEM_CLEAR);
+	printf("ioctl \'MEM_CLEAR\' result is %d\n", ret);
+	ret = read(fd, read_buf, 12);
+	printf("read result is \'%s\', len %d\n", read_buf, ret);
 	close(fd);
 
 	return 0;
