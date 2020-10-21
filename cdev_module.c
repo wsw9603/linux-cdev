@@ -23,6 +23,7 @@ module_param(count, int, S_IRUGO);
 struct globalmem_dev {
 	struct cdev cdev;
 	char buf[GLOBALMEM_SIZE];
+	struct mutex mutex;
 };
 
 static struct class *pclass;
@@ -52,7 +53,6 @@ static int globalmem_release(struct inode *inode, struct file *filp)
 static ssize_t globalmem_read(struct file *filp, char __user *buf,
 			      size_t size, loff_t *offset)
 {
-
 	struct globalmem_dev *pdev = filp->private_data;
 	struct inode *inode = filp->f_path.dentry->d_inode;
 
@@ -66,10 +66,12 @@ static ssize_t globalmem_read(struct file *filp, char __user *buf,
 	if (size > GLOBALMEM_SIZE - *offset)
 		size = GLOBALMEM_SIZE - *offset;
 
+	mutex_lock(&pdev->mutex);
 	if (copy_to_user(buf, pdev->buf + *offset, size))
-		return -EFAULT;
+		size = -EFAULT;
 	else
 		*offset += size;
+	mutex_unlock(&pdev->mutex);
 
 	wws_pr_info("read file successfully, size %zu", size);
 
@@ -91,10 +93,12 @@ static ssize_t globalmem_write(struct file *filp, const char __user *buf,
 	if (size > GLOBALMEM_SIZE - *offset)
 		size = GLOBALMEM_SIZE - *offset;
 
+	mutex_lock(&pdev->mutex);
 	if (copy_from_user(pdev->buf + *offset, buf, size))
-		return -EFAULT;
+		size = -EFAULT;
 	else
 		*offset += size;
+	mutex_unlock(&pdev->mutex);
 
 	wws_pr_info("write to file successfully, size %zu", size);
 
@@ -127,7 +131,10 @@ static long globalmem_ioctl(struct file *filp, unsigned int cmd,
 
 	switch (cmd) {
 	case MEM_CLEAR:
+		mutex_lock(&pdev->mutex);
 		memset(pdev->buf, 0, GLOBALMEM_SIZE);
+		mutex_unlock(&pdev->mutex);
+
 		wws_pr_info("clear buffer to zero");
 		return 0;
 	default:
@@ -168,6 +175,8 @@ static int __init globalmem_setup(int idx)
 		goto error_out;
 	}
 
+	mutex_init(&pdev->mutex);
+
 	return 0;
 
 error_out:
@@ -177,8 +186,11 @@ error_out:
 
 static void globalmem_reset(int idx)
 {
+	struct globalmem_dev *pdev = pglobalmem_dev + idx;
+
 	device_destroy(pclass, MKDEV(major, minor + idx));
-	cdev_del(&(pglobalmem_dev + idx)->cdev);
+	cdev_del(&pdev->cdev);
+	mutex_destroy(&pdev->mutex);
 }
 
 static int __init globalmem_init(void)
