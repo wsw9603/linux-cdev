@@ -21,6 +21,8 @@ static int count = 3; /* 驱动所创建的设备数目 */
 module_param(count, int, S_IRUGO);
 
 struct globalfifo_dev {
+	/* 表示fifo中写入数据的大小，数据一定是从0位置开始写入到buf中的 */
+	size_t length;
 	struct cdev cdev;
 	char buf[GLOBALMEM_SIZE];
 	struct mutex mutex;
@@ -60,17 +62,22 @@ static ssize_t globalfifo_read(struct file *filp, char __user *buf,
 		    current->comm, current->pid);
 	wws_pr_info("major: %d, minor: %d", imajor(inode), iminor(inode));
 
-	if (*offset >= GLOBALMEM_SIZE)
-		return 0; /* 返回0表示读到文件结尾，不要返回错误 */
-
-	if (size > GLOBALMEM_SIZE - *offset)
-		size = GLOBALMEM_SIZE - *offset;
-
 	mutex_lock(&pdev->mutex);
-	if (copy_to_user(buf, pdev->buf + *offset, size))
+
+	if (!pdev->length) {
+		mutex_unlock(&pdev->mutex);
+		return -EAGAIN;
+	}
+
+	size = size > pdev->length ? pdev->length : size;
+
+	if (copy_to_user(buf, pdev->buf, size))
 		size = -EFAULT;
-	else
-		*offset += size;
+	else {
+		pdev->length -= size;
+		memcpy(pdev->buf, pdev->buf + size, pdev->length);
+	}
+
 	mutex_unlock(&pdev->mutex);
 
 	wws_pr_info("read file successfully, size %zu", size);
@@ -88,16 +95,20 @@ static ssize_t globalfifo_write(struct file *filp, const char __user *buf,
 		    current->comm, current->pid);
 	wws_pr_info("major: %d, minor: %d", imajor(inode), iminor(inode));
 
-	if (*offset >= GLOBALMEM_SIZE)
-		return 0;
-	if (size > GLOBALMEM_SIZE - *offset)
-		size = GLOBALMEM_SIZE - *offset;
-
 	mutex_lock(&pdev->mutex);
-	if (copy_from_user(pdev->buf + *offset, buf, size))
+
+	if (pdev->length == GLOBALMEM_SIZE) {
+		mutex_unlock(&pdev->mutex);
+		return -EAGAIN;
+	}
+
+	if (size > GLOBALMEM_SIZE - pdev->length)
+		size = GLOBALMEM_SIZE - pdev->length;
+
+	if (copy_from_user(pdev->buf + pdev->length, buf, size))
 		size = -EFAULT;
 	else
-		*offset += size;
+		pdev->length += size;
 	mutex_unlock(&pdev->mutex);
 
 	wws_pr_info("write to file successfully, size %zu", size);
