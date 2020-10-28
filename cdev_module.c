@@ -26,6 +26,10 @@ struct globalfifo_dev {
 	struct cdev cdev;
 	char buf[GLOBALMEM_SIZE];
 	struct mutex mutex;
+
+	/* 读写操作的等待队列 */
+	wait_queue_head_t r_queue;
+	wait_queue_head_t w_queue;
 };
 
 static struct class *pclass;
@@ -58,15 +62,35 @@ static ssize_t globalfifo_read(struct file *filp, char __user *buf,
 	struct globalfifo_dev *pdev = filp->private_data;
 	struct inode *inode = filp->f_path.dentry->d_inode;
 
+	/* QUES: 上来就将当前进程添加到等待队列，这样好吗? */
+	DECLARE_WAITQUEUE(r_entry, current);
+	/* QUES: add 和remove操作都没有加锁保护，会不会有竞争情况? */
+	add_wait_queue(&pdev->r_queue, &r_entry);
+
 	wws_pr_info("file read by, (%s: pid = %d)",
 		    current->comm, current->pid);
 	wws_pr_info("major: %d, minor: %d", imajor(inode), iminor(inode));
 
 	mutex_lock(&pdev->mutex);
 
-	if (!pdev->length) {
+	/* NOTE: 此处应该用循环检查，而不是用if只判断一次 */
+	while (!pdev->length) {
+		if (filp->f_flags & O_NONBLOCK) {
+			/* 非阻塞方式打开文件，立即返回 */
+			size =  -EAGAIN;
+			goto out_locked;
+		}
+
+		__set_current_state(TASK_INTERRUPTIBLE);
+		/* QUES: unlock操作是否可以提前? */
 		mutex_unlock(&pdev->mutex);
-		return -EAGAIN;
+		schedule();
+		if (signal_pending(current)) {
+			size = -ERESTARTSYS;
+			goto out_unlocked;
+		}
+
+		mutex_lock(&pdev->mutex);
 	}
 
 	size = size > pdev->length ? pdev->length : size;
@@ -76,11 +100,15 @@ static ssize_t globalfifo_read(struct file *filp, char __user *buf,
 	else {
 		pdev->length -= size;
 		memcpy(pdev->buf, pdev->buf + size, pdev->length);
+		wake_up_interruptible(&pdev->w_queue);
+
+		wws_pr_info("read file successfully, size %zu", size);
 	}
 
+out_locked:
 	mutex_unlock(&pdev->mutex);
-
-	wws_pr_info("read file successfully, size %zu", size);
+out_unlocked:
+	remove_wait_queue(&pdev->r_queue, &r_entry);
 
 	return size;
 }
@@ -91,27 +119,50 @@ static ssize_t globalfifo_write(struct file *filp, const char __user *buf,
 	struct globalfifo_dev *pdev = filp->private_data;
 	struct inode *inode = filp->f_path.dentry->d_inode;
 
+	DECLARE_WAITQUEUE(w_entry, current);
+	add_wait_queue(&pdev->w_queue, &w_entry);
+
 	wws_pr_info("file write by, (%s: pid = %d)",
 		    current->comm, current->pid);
 	wws_pr_info("major: %d, minor: %d", imajor(inode), iminor(inode));
 
 	mutex_lock(&pdev->mutex);
 
-	if (pdev->length == GLOBALMEM_SIZE) {
+	while (pdev->length == GLOBALMEM_SIZE) {
+		if (filp->f_flags & O_NONBLOCK) {
+			size = -EAGAIN;
+			goto out_locked;
+		}
+
+		__set_current_state(TASK_INTERRUPTIBLE);
 		mutex_unlock(&pdev->mutex);
-		return -EAGAIN;
+		schedule();
+
+		if (signal_pending(current)) {
+			size = -ERESTARTSYS;
+			goto out_unlocked;
+		}
+
+		mutex_lock(&pdev->mutex);
 	}
 
 	if (size > GLOBALMEM_SIZE - pdev->length)
 		size = GLOBALMEM_SIZE - pdev->length;
 
-	if (copy_from_user(pdev->buf + pdev->length, buf, size))
+	if (copy_from_user(pdev->buf + pdev->length, buf, size)) {
 		size = -EFAULT;
-	else
-		pdev->length += size;
-	mutex_unlock(&pdev->mutex);
+		goto out_locked;
+	}
+
+	pdev->length += size;
+	wake_up_interruptible(&pdev->r_queue);
 
 	wws_pr_info("write to file successfully, size %zu", size);
+
+out_locked:
+	mutex_unlock(&pdev->mutex);
+out_unlocked:
+	remove_wait_queue(&pdev->w_queue, &w_entry);
 
 	return size;
 }
@@ -187,6 +238,8 @@ static int __init globalfifo_setup(int idx)
 	}
 
 	mutex_init(&pdev->mutex);
+	init_waitqueue_head(&pdev->r_queue);
+	init_waitqueue_head(&pdev->w_queue);
 
 	return 0;
 
