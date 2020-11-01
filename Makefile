@@ -7,18 +7,19 @@ export CROSS_COMPILE=aarch64-linux-gnu-
 cdev_module.ko: FORCE
 	make -C $(KERNEL_DIR) M=$(CURRENT_DIR) modules
 # 普通二进制文件是否也可以借用内核的Makefile来编译？
-test_file: test.c
+test_file:= test test_select
+%: %.c
 	$(CROSS_COMPILE)gcc -static -o $@ $^
 
-.PHONY: install test clean help FORCE
-install: cdev_module.ko test_file
+.PHONY: install qemu clean help FORCE
+install: cdev_module.ko $(test_file)
 	cp $^ ~/qemu-lab/rootfs/modules/
 	~/qemu-lab/scripts/mkrootfs.sh
-test:
+qemu:
 	~/qemu-lab/scripts/start_qemu.sh
 clean:
 	make -C $(KERNEL_DIR) M=$(CURRENT_DIR) clean
-	rm -f test_file
+	rm -f $(test_file)
 help:
 	make -C $(KERNEL_DIR) M=$(CURRENT_DIR) help
 FORCE: ;
