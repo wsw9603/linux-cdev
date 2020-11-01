@@ -4,6 +4,7 @@
 #include <linux/cdev.h>
 #include <linux/fs.h>
 #include <linux/slab.h>
+#include <linux/poll.h>
 
 #include "cdev_module.h"
 
@@ -167,6 +168,32 @@ out_unlocked:
 	return size;
 }
 
+static __poll_t globalfifo_poll(struct file *filp,
+			struct poll_table_struct *wait)
+{
+	__poll_t mask = 0;
+	struct globalfifo_dev *pdev = filp->private_data;
+
+	mutex_lock(&pdev->mutex);
+
+	poll_wait(filp, &pdev->r_queue, wait);
+	poll_wait(filp, &pdev->w_queue, wait);
+
+	/*
+	 * NOTE:此处的IN/OUT是对于用户态程序来说的，可读即IN，可写即OUT
+	 * 对于设备来说的话这一点正好相反，用户的读是设备的out，容易混淆
+	 */
+	if (pdev->length != 0)
+		mask |= POLLIN | POLLRDNORM; /* 两个标志位是等价的 */
+
+	if (pdev->length != GLOBALMEM_SIZE)
+		mask |= POLLOUT | POLLWRNORM; /* 两个标志位是等价的 */
+
+	mutex_unlock(&pdev->mutex);
+
+	return mask;
+}
+
 static loff_t globalfifo_llseek(struct file *filp, loff_t offset, int orig)
 {
 	switch (orig) {
@@ -212,6 +239,7 @@ static struct file_operations fops = {
 	.write		= globalfifo_write,
 	.llseek		= globalfifo_llseek,
 	.unlocked_ioctl	= globalfifo_ioctl,
+	.poll		= globalfifo_poll,
 };
 
 static int __init globalfifo_setup(int idx)
