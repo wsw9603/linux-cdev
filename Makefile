@@ -7,7 +7,7 @@ export CROSS_COMPILE=aarch64-linux-gnu-
 cdev_module.ko: FORCE
 	make -C $(KERNEL_DIR) M=$(CURRENT_DIR) modules
 # 普通二进制文件是否也可以借用内核的Makefile来编译？
-test_file:= test test_select
+test_file:= test test_select test_epoll
 %: %.c
 	$(CROSS_COMPILE)gcc -static -o $@ $^
 
